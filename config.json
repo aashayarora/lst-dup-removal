@@ -1,0 +1,18 @@
+{
+    "input_path": "./data/",
+    "output_path": "./",
+    "epochs": 30,
+    "validation_step": 3,
+
+    "training_split": 0.8,
+    "batch_size": 32,
+    "learning_rate": 0.005,
+
+    "CL_margin": 3.0,
+
+    "input_dim": 5,
+    "hidden_dim": 8,
+    "output_dim": 16,
+    "knn_neighbors": 5
+    
+}
