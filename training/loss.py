@@ -14,7 +14,7 @@ class ContrastiveLoss(nn.Module):
         dist = torch.sqrt(dist_sq + self.eps)
 
         attr = target*dist_sq
-        rep  = (1 - target) * (F.relu(self.margin - dist)**2)
+        rep = (1 - target) * (F.relu(self.margin - dist)**2)
 
-        loss  = torch.mean(attr + rep)
+        loss = torch.mean(attr + rep)
         return loss, torch.mean(attr), torch.mean(rep)
