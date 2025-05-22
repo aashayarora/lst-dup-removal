@@ -31,10 +31,9 @@ if __name__ == "__main__":
     with open(args.config, 'r') as f:
         config = json.load(f)
 
-    # Load the configuration parameters
     input_path = config.get('input_path', '../data/')
     output_path = config.get('output_path', './')
-    regex = config.get('regex', 'graph_*.pt')
+    regex = config.get('regex', '*.pt')
     
     epochs = config.get('epochs', 50)
     validation_step = config.get('validation_step', 5)
@@ -47,7 +46,7 @@ if __name__ == "__main__":
     knn_neighbors = config.get('knn_neighbors', 5)
 
     train_size = config.get('training_split', 0.8)
-    learning_rate = config.get('learning_rate', 0.005)
+    learning_rate = config.get('learning_rate', 0.001)
 
     margin = config.get('CL_margin', 0.5)
     
