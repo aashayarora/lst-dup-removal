@@ -1,6 +1,6 @@
 {
-    "input_path": "/home/aryan/git/lst-dup-removal/graphs/", 
-    "output_path": "/home/aryan/git/lst-dup-removal/output/",
+    "input_path": "./data/",
+    "output_path": "./",
     "epochs": 8,
     "validation_step": 3,
 
