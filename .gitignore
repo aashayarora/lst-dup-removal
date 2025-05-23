@@ -1,4 +1,4 @@
-*.pt
-*.png
+**.pt
+**.png
 __pycache__
 test*

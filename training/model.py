@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import SimpleConv
 from torch_cluster import knn_graph
     
 class DRNetwork(nn.Module):
@@ -11,11 +11,10 @@ class DRNetwork(nn.Module):
         if input_dim is not None and hidden_dim is not None and output_dim is not None:
             self.linear = nn.Linear(input_dim, hidden_dim)
             # layers
-            self.conv = GATConv(in_channels=hidden_dim, out_channels=hidden_dim)
+            # self.conv = GATConv(in_channels=hidden_dim, out_channels=hidden_dim)
+            self.conv = SimpleConv()
             self.embedding_dnn = nn.Sequential(
-                nn.Linear(hidden_dim, 4 * hidden_dim),
-                nn.ReLU(),
-                nn.Linear(4 * hidden_dim, 2 * hidden_dim),
+                nn.Linear(hidden_dim, 2 * hidden_dim),
                 nn.ReLU(),
                 nn.Linear(2 * hidden_dim, output_dim)
             )
@@ -43,13 +42,6 @@ class DRNetwork(nn.Module):
             unique, counts = torch.unique(data.batch, sorted=True, return_counts=True)
             ptr[1:][unique] = counts
             ptr = ptr.cumsum(dim=0)
-            
-            batch_for_pairs = data.batch_for_pairs if hasattr(data, 'batch_for_pairs') else data.batch[data.pairs_indices[:, 0]]
-            
-            offsets = ptr[batch_for_pairs]
-            
-            adjusted_first_indices = data.pairs_indices[:, 0] - offsets
-            adjusted_second_indices = data.pairs_indices[:, 1] - offsets
             
             first_embeddings = x[data.pairs_indices[:, 0]]
             second_embeddings = x[data.pairs_indices[:, 1]]
