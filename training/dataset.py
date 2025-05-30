@@ -16,7 +16,7 @@ class GraphDataset(Dataset):
     def __getitem__(self, idx):
         graph = torch.load(self.files[idx], weights_only=False)
         # graph x: pt, eta, sinphi, cosphi, type
-        graph.x[:, 0] = graph.x[:, 0] / 10
+        graph.x[:, 0] = torch.log10(1 + graph.x[:, 0])
         graph.x[:, 1] = graph.x[:, 1] / 5
         graph.x[:, 4] = graph.x[:, 4] / 10
         return graph

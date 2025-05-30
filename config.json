@@ -1,17 +1,18 @@
 {
     "input_path": "./data/",
     "output_path": "./output/",
-    "epochs": 20,
-    "validation_step": 3,
+    "epochs": 400,
+    "validation_step": 20,
+    "save_step": 100,
 
     "training_split": 0.8,
     "batch_size": 64,
     "learning_rate": 0.001,
 
-    "CL_margin": 1.0,
+    "CL_margin": 0.5,
 
     "input_dim": 5,
-    "hidden_dim": 8,
-    "output_dim": 16,
-    "knn_neighbors": 5
+    "hidden_dim": 4,
+    "output_dim": 8,
+    "knn_neighbors": 3
 }

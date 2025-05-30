@@ -37,6 +37,7 @@ if __name__ == "__main__":
     
     epochs = config.get('epochs', 50)
     validation_step = config.get('validation_step', 5)
+    save_step = config.get('save_step', 100)
     
     batch_size = config.get('batch_size', 16)
     
@@ -114,9 +115,13 @@ if __name__ == "__main__":
             test_losses.append([avg_batch_loss, avg_batch_loss_attractive, avg_batch_loss_repulsive])
             tqdm.write(f"Epoch {epoch}, Test Loss: {avg_batch_loss}")
 
+        if epoch % save_step == 0:            
+            # Save the model
+            torch.save(model.state_dict(), f"{output_path}/model_{epoch}.pt")
+            tqdm.write(f"Model saved to {output_path}/model_{epoch}.pt")
+
     train_losses = np.array(train_losses)
     test_losses = np.array(test_losses)
-
     fig, ax = plt.subplots()
     ax.plot(train_losses[:, 0], label='Train Loss')
     ax.plot(train_losses[:, 1], label='Train Loss (Attractive)')
@@ -129,8 +134,3 @@ if __name__ == "__main__":
     ax.set_ylabel('Loss')
     ax.legend()
     plt.savefig(f"{output_path}/loss_plot.png")
-
-
-    # Save the model
-    torch.save(model.state_dict(), f"{output_path}/model.pt")
-    print(f"Model saved to {output_path}/model.pt")

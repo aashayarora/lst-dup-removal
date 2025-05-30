@@ -14,10 +14,18 @@ FEATURES = [
     'tc_eta',
     'tc_phi',
     'tc_type',
+    'tc_isDuplicate',
+    'tc_matched_simIdx',
+    'tc_lsIdx',
+    'tc_t3Idx'
 ]
 
-TARGETS = [
-    "tc_matched_simIdx"
+OUTPUT_FEATURES = [
+    'tc_pt',
+    'tc_eta',
+    'tc_sinphi',
+    'tc_cosphi',
+    'tc_type'
 ]
 
 class GraphBuilder:
@@ -28,7 +36,7 @@ class GraphBuilder:
 
         self.input_tree = uproot.open(input_path)["tree"]
 
-    def process_event(self, event_data, idx, debug=False, overwrite=False):
+    def process_event(self, arr, idx, debug=False, overwrite=False):
         """Processes a single event and saves the graph."""
         try:
             output_file = os.path.join(self.output_path, f"graph_{idx}.pt")
@@ -38,106 +46,125 @@ class GraphBuilder:
                 print(f"Graph {idx} already exists, skipping...")
                 return
             
-            arr = event_data[FEATURES]
+            duplicate_mask = arr["tc_isDuplicate"] == 1
+
+            arr["tc_idx"] = [np.arange(len(arr["tc_pt"][0]))]
+            dup_sim_idxs = ak.to_dataframe(ak.fill_none(ak.firsts(arr["tc_matched_simIdx"][duplicate_mask], axis=-1), -1))
+            duplicate_mask = duplicate_mask[0]
+
+            dup_pair_idxs = {}
+            for i, simIdx in enumerate(dup_sim_idxs.values.flatten()):
+                if simIdx == -1:
+                    continue
+                if simIdx not in dup_pair_idxs:
+                    dup_pair_idxs[simIdx] = []
+                dup_pair_idxs[simIdx].append(arr["tc_idx"][0][duplicate_mask][i])
+
+            pair_idxs_left = []
+            pair_idxs_right = []    
+
+            dup_pair_labels = []
+            for simIdx, pair_idxs in dup_pair_idxs.items():
+                if len(pair_idxs) != 2:
+                    continue
+                pair_idxs_left.append(pair_idxs[0])
+                pair_idxs_right.append(pair_idxs[1])
+                dup_pair_labels.append(1)
+
+            pts = arr["tc_pt"][0]
+            etas = arr["tc_eta"][0]
+            phis = arr["tc_phi"][0]
+            n_particles = len(pts)
+
+            i_indices, j_indices = np.tril_indices(n_particles, k=-1)
+
+            both_duplicates = np.logical_and(duplicate_mask[i_indices], duplicate_mask[j_indices])
+            valid_i = i_indices[~both_duplicates]
+            valid_j = j_indices[~both_duplicates]
+
+            delta_phi = np.abs(((phis[valid_i] - phis[valid_j] + np.pi) % (2 * np.pi)) - np.pi)
+
+            dR2 =(etas[valid_i] - etas[valid_j])**2 + delta_phi**2
+
+            close_pairs_mask = dR2 < 0.02
+            close_i = valid_i[close_pairs_mask]
+            close_j = valid_j[close_pairs_mask]
+
+            if len(close_i) > 0:
+                n_samples = min(len(pair_idxs_left), len(close_i))
+                if n_samples > 0:
+                    sample_indices = np.random.choice(len(close_i), size=n_samples, replace=False)
+                    
+                    sampled_i = close_i[sample_indices]
+                    sampled_j = close_j[sample_indices]
+                    
+                    pair_idxs_left.extend(sampled_i.tolist())
+                    pair_idxs_right.extend(sampled_j.tolist())
+                    dup_pair_labels.extend([0] * n_samples)
+            
+            pair_idxs_left = np.array(pair_idxs_left, dtype=np.int64)
+            pair_idxs_right = np.array(pair_idxs_right, dtype=np.int64)
+
             arr["tc_sinphi"] = np.sin(arr["tc_phi"])
             arr["tc_cosphi"] = np.cos(arr["tc_phi"])
-            arr = arr[["tc_pt", "tc_eta", "tc_sinphi", "tc_cosphi", "tc_type"]]
+            dup_features = ak.to_dataframe(arr[OUTPUT_FEATURES])
 
-            node_features = torch.Tensor(ak.to_dataframe(arr).values)
-            target = torch.Tensor(ak.to_dataframe(ak.fill_none(ak.firsts(event_data[TARGETS], axis=-1), -1)).values)
+            edge_index = self._build_edges(arr, dup_features, pair_idxs_left, pair_idxs_right)
 
-            # Extract simulation indices
-            sim_indices = target.squeeze().numpy()
-            num_nodes = node_features.shape[0]
-            
-            # Group nodes by simulation index (except for unmatched nodes with sim_idx == -1)
-            sim_idx_to_nodes = {}
-            for i in range(num_nodes):
-                sim_idx = int(sim_indices[i])
-                if sim_idx >= 0:  # Skip unmatched nodes
-                    if sim_idx not in sim_idx_to_nodes:
-                        sim_idx_to_nodes[sim_idx] = []
-                    sim_idx_to_nodes[sim_idx].append(i)
-            
-            # Create mapping for duplicates - nodes with same simulation indices
-            duplicate_mapping = {}
-            pairs_indices = []
-            pairs_labels = []
-            
-            # Create all possible pairs of duplicates
-            for sim_idx, nodes in sim_idx_to_nodes.items():
-                if len(nodes) >= 2:  # At least 2 nodes to form a pair
-                    # Create all possible pairs from nodes with the same sim_idx
-                    for i in range(len(nodes)):
-                        for j in range(i + 1, len(nodes)):
-                            src_idx, dst_idx = nodes[i], nodes[j]
-                            duplicate_mapping[src_idx] = dst_idx
-                            duplicate_mapping[dst_idx] = src_idx
-                            pairs_indices.append([src_idx, dst_idx])
-                            pairs_labels.append(1)  # 1 means same particle (positive pair)
-            
-            # Count how many positive pairs we have
-            num_pos_pairs = len(pairs_indices)
-            
-            # Generate an equal number of negative pairs (non-duplicates)
-            if num_pos_pairs > 0:
-                # Create a list of all possible node pairs
-                all_nodes = list(range(num_nodes))
-                
-                # Sample negative pairs
-                neg_pairs_count = 0
-                max_attempts = num_pos_pairs * 10  # Prevent infinite loop
-                attempts = 0
-                
-                while neg_pairs_count < num_pos_pairs and attempts < max_attempts:
-                    # Randomly select two nodes
-                    i, j = np.random.choice(all_nodes, 2, replace=False)
-                    
-                    # Check if they're not duplicates of each other
-                    if i not in duplicate_mapping or duplicate_mapping[i] != j:
-                        # Make sure this pair hasn't been added already
-                        if [i, j] not in pairs_indices and [j, i] not in pairs_indices:
-                            pairs_indices.append([i, j])
-                            pairs_labels.append(0)  # 0 means different particles (negative pair)
-                            neg_pairs_count += 1
-                    
-                    attempts += 1
-            
-            # Convert to tensors
-            if pairs_indices:
-                pairs_indices = torch.tensor(pairs_indices)
-                pairs_labels = torch.tensor(pairs_labels)
-            else:
-                pairs_indices = torch.zeros((0, 2), dtype=torch.long)
-                pairs_labels = torch.zeros(0, dtype=torch.long)
-            
-            # Convert duplicate mapping to PyTorch tensors
-            duplicate_idx = torch.ones(num_nodes, dtype=torch.long) * -1  # Default: no duplicate (-1)
-            for src_idx, dst_idx in duplicate_mapping.items():
-                duplicate_idx[src_idx] = dst_idx
-            
-            # Add all metadata to the graph
             graph = Data(
-                x=node_features, 
-                y=target,
-                pairs_indices=pairs_indices,
-                pairs_labels=pairs_labels,
-                duplicate_idx=duplicate_idx,
-                batch_for_pairs=torch.zeros(pairs_indices.shape[0], dtype=torch.long) if pairs_indices.shape[0] > 0 else torch.zeros(0, dtype=torch.long)
+                x=torch.tensor(dup_features.values, dtype=torch.float),
+                y=torch.tensor(dup_pair_labels, dtype=torch.float),
+                edge_index=edge_index,
+                pair_idxs_left=torch.tensor(pair_idxs_left, dtype=torch.long),
+                pair_idxs_right=torch.tensor(pair_idxs_right, dtype=torch.long),
             )
-
-            if debug:
-                print(graph)
-                print(f"Total nodes: {num_nodes}")
-                print(f"Duplicate pairs found: {num_pos_pairs}")
-                print(f"Total contrastive pairs: {len(pairs_indices)}")
-                return
-
+            
             torch.save(graph, output_file)
             print(f"Processed graph {idx}")
-            
+
         except Exception as e:
             print(f"Error processing graph {idx}: {e}")
+
+    @staticmethod
+    def _build_edges(arr, dup_features, pair_idxs_left, pair_idxs_right):
+        lsidxs = arr["tc_lsIdx"][0]  # Jagged array of lsIdx values
+        
+        # Initialize lists to store source and destination indices for edges
+        edge_src = []
+        edge_dst = []
+        
+        # Create a mapping from each lsIdx to the nodes that have it
+        lsidx_to_nodes = {}
+        
+        # Handle awkward array conversion if needed
+        if hasattr(lsidxs, 'tolist'):
+            lsidxs_list = lsidxs.tolist()
+        else:
+            lsidxs_list = lsidxs
+        
+        # Populate the mapping
+        for node_idx, node_lsidxs in enumerate(lsidxs_list):
+            if node_lsidxs is None:
+                continue
+            for lsidx in node_lsidxs:
+                if lsidx not in lsidx_to_nodes:
+                    lsidx_to_nodes[lsidx] = []
+                lsidx_to_nodes[lsidx].append(node_idx)
+        
+        # For each lsIdx, create edges between all pairs of nodes that share it
+        for lsidx, nodes in lsidx_to_nodes.items():
+            for i in range(len(nodes)):
+                for j in range(i + 1, len(nodes)):
+                    # Add edge in both directions (for undirected graph representation)
+                    edge_src.append(nodes[i])
+                    edge_dst.append(nodes[j])
+                    edge_src.append(nodes[j])
+                    edge_dst.append(nodes[i])
+        
+        # Convert to PyTorch tensor with shape [2, num_edges]
+        edge_index = torch.tensor([edge_src, edge_dst], dtype=torch.long)
+        
+        return edge_index
 
     def process_events_in_parallel(self, n_workers, debug=False, overwrite=False):
         num_events = self.input_tree.num_entries if not debug else 1
@@ -147,7 +174,7 @@ class GraphBuilder:
             for idx in range(num_events):
                 executor.submit(
                     self.process_event,
-                    self.input_tree.arrays(FEATURES + TARGETS, entry_start=idx, entry_stop=idx + 1),
+                    self.input_tree.arrays(FEATURES, entry_start=idx, entry_stop=idx + 1),
                     idx, debug, overwrite
                 )
 
