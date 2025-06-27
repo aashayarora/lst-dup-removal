@@ -9,14 +9,15 @@ class ContrastiveLoss(nn.Module):
         self.eps = eps
 
     def forward(self, output, target):
+        # Handle stacked embeddings format [2, batch_size, embedding_dim]
         z1, z2 = output[0], output[1]
-        z1 = F.normalize(z1, p=2, dim=1)
-        z2 = F.normalize(z2, p=2, dim=1)
-        dist_sq = torch.sum((z1 - z2)**2, dim=1) 
+
+        dist_sq = torch.sum((z1 - z2)**2, dim=-1) 
         dist = torch.sqrt(dist_sq + self.eps)
 
-        attr = target*dist_sq
+        attr = target * dist_sq
         rep = (1 - target) * (F.relu(self.margin - dist)**2)
 
         loss = torch.mean(attr + rep)
+        
         return loss, torch.mean(attr), torch.mean(rep)

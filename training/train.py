@@ -5,7 +5,7 @@ def train_batch(model, optimizer, criterion, data):
     model.train()
     optimizer.zero_grad()
 
-    pair_embeddings, labels = model(data)
+    pair_embeddings, _, labels = model(data)
 
     if labels.numel() == 0:
         return None
@@ -18,7 +18,7 @@ def train_batch(model, optimizer, criterion, data):
 def validate_batch(model, criterion, data):
     model.eval()
     with torch.no_grad():
-        pair_embeddings, labels = model(data)
+        pair_embeddings, _, labels = model(data)
         if labels.numel() == 0:
             return None
         loss = criterion(pair_embeddings, labels)

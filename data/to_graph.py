@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
+import matplotlib.pyplot as plt
+
 FEATURES = [
     'tc_pt',
     'tc_eta',
@@ -23,9 +25,10 @@ FEATURES = [
 OUTPUT_FEATURES = [
     'tc_pt',
     'tc_eta',
+    'tc_phi',
     'tc_sinphi',
     'tc_cosphi',
-    'tc_type'
+    'tc_type',
 ]
 
 class GraphBuilder:
@@ -46,34 +49,51 @@ class GraphBuilder:
                 print(f"Graph {idx} already exists, skipping...")
                 return
             
-            duplicate_mask = arr["tc_isDuplicate"] == 1
+            tc_idx = np.arange(len(arr["tc_eta"][0]))
+            duplicate_mask = (arr["tc_isDuplicate"] == 1)[0]
 
-            arr["tc_idx"] = [np.arange(len(arr["tc_pt"][0]))]
-            dup_sim_idxs = ak.to_dataframe(ak.fill_none(ak.firsts(arr["tc_matched_simIdx"][duplicate_mask], axis=-1), -1))
-            duplicate_mask = duplicate_mask[0]
-
+            tc_matched_simidx = ak.firsts(ak.where(ak.num(arr["tc_matched_simIdx"][0]) == 0, [[-1]] * len(arr["tc_matched_simIdx"][0]), arr["tc_matched_simIdx"][0]))
+            dup_sim_idxs = tc_matched_simidx[duplicate_mask]
+            
             dup_pair_idxs = {}
-            for i, simIdx in enumerate(dup_sim_idxs.values.flatten()):
+            for i, simIdx in enumerate(dup_sim_idxs):
                 if simIdx == -1:
                     continue
                 if simIdx not in dup_pair_idxs:
                     dup_pair_idxs[simIdx] = []
-                dup_pair_idxs[simIdx].append(arr["tc_idx"][0][duplicate_mask][i])
+                dup_pair_idxs[simIdx].append(tc_idx[duplicate_mask][i])
 
             pair_idxs_left = []
             pair_idxs_right = []    
 
-            dup_pair_labels = []
             for simIdx, pair_idxs in dup_pair_idxs.items():
-                if len(pair_idxs) != 2:
+                if len(pair_idxs) < 2:
                     continue
                 pair_idxs_left.append(pair_idxs[0])
                 pair_idxs_right.append(pair_idxs[1])
-                dup_pair_labels.append(1)
 
             pts = arr["tc_pt"][0]
             etas = arr["tc_eta"][0]
             phis = arr["tc_phi"][0]
+
+            pair_idxs_left = np.array(pair_idxs_left)
+            pair_idxs_right = np.array(pair_idxs_right)
+
+            deltaR = np.sqrt((etas[pair_idxs_left] - etas[pair_idxs_right])**2 + 
+                             np.abs(((phis[pair_idxs_left] - phis[pair_idxs_right] + np.pi) % (2 * np.pi)) - np.pi)**2)
+
+            # Remove pairs with deltaR == 0 (exact duplicates)
+            pair_idxs_left = list(pair_idxs_left[deltaR > 0])
+            pair_idxs_right = list(pair_idxs_right[deltaR > 0])
+            dup_pair_labels = [1] * len(pair_idxs_left)
+
+
+            deltaR = np.sqrt((etas[pair_idxs_left] - etas[pair_idxs_right])**2 + 
+                             np.abs(((phis[pair_idxs_left] - phis[pair_idxs_right] + np.pi) % (2 * np.pi)) - np.pi)**2)
+
+            num_dups = len(pair_idxs_left)
+
+            # NON-DUPLICATES
             n_particles = len(pts)
 
             i_indices, j_indices = np.tril_indices(n_particles, k=-1)
@@ -82,43 +102,79 @@ class GraphBuilder:
             valid_i = i_indices[~both_duplicates]
             valid_j = j_indices[~both_duplicates]
 
-            delta_phi = np.abs(((phis[valid_i] - phis[valid_j] + np.pi) % (2 * np.pi)) - np.pi)
+            deltaR = np.sqrt((etas[valid_i] - etas[valid_j])**2 + np.abs(((phis[valid_i] - phis[valid_j] + np.pi) % (2 * np.pi)) - np.pi)**2)
+            
+            # Add diverse negative samples instead of just close pairs
+            negative_pairs_i = []
+            negative_pairs_j = []
+            negative_labels = []
 
-            dR2 =(etas[valid_i] - etas[valid_j])**2 + delta_phi**2
-
-            close_pairs_mask = dR2 < 0.02
+            # Identify close pairs (deltaR < 0.02)
+            close_pairs_mask = (deltaR < 0.02) & (deltaR > 0.)
             close_i = valid_i[close_pairs_mask]
             close_j = valid_j[close_pairs_mask]
 
+            # 1. Sample some close but non-duplicate pairs (hard negatives)
             if len(close_i) > 0:
-                n_samples = min(len(pair_idxs_left), len(close_i))
-                if n_samples > 0:
-                    sample_indices = np.random.choice(len(close_i), size=n_samples, replace=False)
-                    
-                    sampled_i = close_i[sample_indices]
-                    sampled_j = close_j[sample_indices]
-                    
-                    pair_idxs_left.extend(sampled_i.tolist())
-                    pair_idxs_right.extend(sampled_j.tolist())
-                    dup_pair_labels.extend([0] * n_samples)
+                n_close_samples = min(int(num_dups * 0.9), len(close_i))
+                if n_close_samples > 0:
+                    close_sample_indices = np.random.choice(len(close_i), size=n_close_samples, replace=False)
+                    negative_pairs_i.extend(close_i[close_sample_indices].tolist())
+                    negative_pairs_j.extend(close_j[close_sample_indices].tolist())
+                    negative_labels.extend([0] * n_close_samples)
+
+            # 2. Sample medium distance pairs (medium negatives)
+            medium_pairs_mask = (deltaR >= 0.02) & (deltaR < 0.1)
+            medium_i = valid_i[medium_pairs_mask]
+            medium_j = valid_j[medium_pairs_mask]
             
-            pair_idxs_left = np.array(pair_idxs_left, dtype=np.int64)
-            pair_idxs_right = np.array(pair_idxs_right, dtype=np.int64)
+            if len(medium_i) > 0:
+                n_medium_samples = min(int(num_dups * 0.05), len(medium_i))
+                if n_medium_samples > 0:
+                    medium_sample_indices = np.random.choice(len(medium_i), size=n_medium_samples, replace=False)
+                    negative_pairs_i.extend(medium_i[medium_sample_indices].tolist())
+                    negative_pairs_j.extend(medium_j[medium_sample_indices].tolist())
+                    negative_labels.extend([0] * n_medium_samples)
+
+            # 3. Sample some random distant pairs (easy negatives)
+            far_pairs_mask = deltaR >= 1.0
+            far_i = valid_i[far_pairs_mask]
+            far_j = valid_j[far_pairs_mask]
+            
+            if len(far_i) > 0:
+                n_far_samples = min(int(num_dups * 0.05), len(far_i))
+                # n_far_samples = min(int(num_dups), len(far_i))
+                if n_far_samples > 0:
+                    far_sample_indices = np.random.choice(len(far_i), size=n_far_samples, replace=False)
+                    negative_pairs_i.extend(far_i[far_sample_indices].tolist())
+                    negative_pairs_j.extend(far_j[far_sample_indices].tolist())
+                    negative_labels.extend([0] * n_far_samples)
+
+            # Combine all pairs
+            pair_idxs_left.extend(negative_pairs_i)
+            pair_idxs_right.extend(negative_pairs_j)
+            dup_pair_labels.extend(negative_labels)
+            
+            # Ensure we have some examples (skip if no valid pairs)
+            if len(pair_idxs_left) == 0:
+                print(f"No valid pairs found for event {idx}, skipping...")
+                return
 
             arr["tc_sinphi"] = np.sin(arr["tc_phi"])
             arr["tc_cosphi"] = np.cos(arr["tc_phi"])
             dup_features = ak.to_dataframe(arr[OUTPUT_FEATURES])
 
-            edge_index = self._build_edges(arr, dup_features, pair_idxs_left, pair_idxs_right)
+            edge_index, edge_attr = self._build_edges(arr, dup_features)
 
             graph = Data(
                 x=torch.tensor(dup_features.values, dtype=torch.float),
                 y=torch.tensor(dup_pair_labels, dtype=torch.float),
                 edge_index=edge_index,
+                edge_attr=edge_attr,
                 pair_idxs_left=torch.tensor(pair_idxs_left, dtype=torch.long),
                 pair_idxs_right=torch.tensor(pair_idxs_right, dtype=torch.long),
             )
-            
+
             torch.save(graph, output_file)
             print(f"Processed graph {idx}")
 
@@ -126,12 +182,15 @@ class GraphBuilder:
             print(f"Error processing graph {idx}: {e}")
 
     @staticmethod
-    def _build_edges(arr, dup_features, pair_idxs_left, pair_idxs_right):
+    def _build_edges(arr, dup_features):
         lsidxs = arr["tc_lsIdx"][0]  # Jagged array of lsIdx values
+        etas = arr["tc_eta"][0]
+        phis = arr["tc_phi"][0]
         
         # Initialize lists to store source and destination indices for edges
         edge_src = []
         edge_dst = []
+        edge_attrs = []
         
         # Create a mapping from each lsIdx to the nodes that have it
         lsidx_to_nodes = {}
@@ -155,16 +214,23 @@ class GraphBuilder:
         for lsidx, nodes in lsidx_to_nodes.items():
             for i in range(len(nodes)):
                 for j in range(i + 1, len(nodes)):
+                    node_i, node_j = nodes[i], nodes[j]
+                    
+                    # Calculate dR² between the two nodes
+                    delta_eta = etas[node_i] - etas[node_j]
+                    delta_phi = np.abs(((phis[node_i] - phis[node_j] + np.pi) % (2 * np.pi)) - np.pi)
+                    deltaR = np.sqrt(delta_eta**2 + delta_phi**2)
+                    
                     # Add edge in both directions (for undirected graph representation)
-                    edge_src.append(nodes[i])
-                    edge_dst.append(nodes[j])
-                    edge_src.append(nodes[j])
-                    edge_dst.append(nodes[i])
+                    edge_src.extend([node_i, node_j])
+                    edge_dst.extend([node_j, node_i])
+                    edge_attrs.extend([deltaR, deltaR])
         
-        # Convert to PyTorch tensor with shape [2, num_edges]
+        # Convert to PyTorch tensors
         edge_index = torch.tensor([edge_src, edge_dst], dtype=torch.long)
+        edge_attr = torch.tensor(edge_attrs, dtype=torch.float).unsqueeze(1)  # Shape [num_edges, 1]
         
-        return edge_index
+        return edge_index, edge_attr
 
     def process_events_in_parallel(self, n_workers, debug=False, overwrite=False):
         num_events = self.input_tree.num_entries if not debug else 1

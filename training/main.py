@@ -44,8 +44,6 @@ if __name__ == "__main__":
     hidden_dim = config.get('hidden_dim', 8)
     output_dim = config.get('output_dim', 32)
 
-    knn_neighbors = config.get('knn_neighbors', 5)
-
     train_size = config.get('training_split', 0.8)
     learning_rate = config.get('learning_rate', 0.001)
 
@@ -73,7 +71,6 @@ if __name__ == "__main__":
         input_dim=num_node_features,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        k=knn_neighbors
     )
     model.to(device)
 
