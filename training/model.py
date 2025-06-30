@@ -27,7 +27,7 @@ class DRNetwork(nn.Module):
 
     def forward(self, data):
         x = self.linear(data.x).relu()
-        x = self.conv(x, edge_index=data.edge_index).relu()
+        x = self.conv(x, edge_index=data.edge_index, edge_attr=data.edge_attr).relu()
         
         x = self.embedding_dnn(data.x)
 

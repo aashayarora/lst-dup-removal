@@ -110,13 +110,13 @@ class GraphBuilder:
             negative_labels = []
 
             # Identify close pairs (deltaR < 0.02)
-            close_pairs_mask = (deltaR < 0.02) & (deltaR > 0.)
+            close_pairs_mask = (deltaR < 0.05) & (deltaR > 0.)
             close_i = valid_i[close_pairs_mask]
             close_j = valid_j[close_pairs_mask]
 
             # 1. Sample some close but non-duplicate pairs (hard negatives)
             if len(close_i) > 0:
-                n_close_samples = min(int(num_dups * 0.9), len(close_i))
+                n_close_samples = min(int(num_dups), len(close_i))
                 if n_close_samples > 0:
                     close_sample_indices = np.random.choice(len(close_i), size=n_close_samples, replace=False)
                     negative_pairs_i.extend(close_i[close_sample_indices].tolist())
@@ -124,7 +124,7 @@ class GraphBuilder:
                     negative_labels.extend([0] * n_close_samples)
 
             # 2. Sample medium distance pairs (medium negatives)
-            medium_pairs_mask = (deltaR >= 0.02) & (deltaR < 0.1)
+            medium_pairs_mask = (deltaR >= 0.05) & (deltaR < 0.1)
             medium_i = valid_i[medium_pairs_mask]
             medium_j = valid_j[medium_pairs_mask]
             
@@ -143,7 +143,6 @@ class GraphBuilder:
             
             if len(far_i) > 0:
                 n_far_samples = min(int(num_dups * 0.05), len(far_i))
-                # n_far_samples = min(int(num_dups), len(far_i))
                 if n_far_samples > 0:
                     far_sample_indices = np.random.choice(len(far_i), size=n_far_samples, replace=False)
                     negative_pairs_i.extend(far_i[far_sample_indices].tolist())

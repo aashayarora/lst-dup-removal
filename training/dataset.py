@@ -23,7 +23,6 @@ class GraphDataset(Dataset):
         # graph x: pt, eta, sinphi, cosphi, type, phi
         graph.x[:, 0] = torch.log10(1 + graph.x[:, 0])  # pt
         graph.x[:, 1] = graph.x[:, 1] / 5  # eta
-        graph.x[:, 4] = graph.x[:, 4] / 10  # type
-        if graph.x.shape[1] > 5:
-            graph.x[:, 5] = graph.x[:, 5] / 3.14  # phi normalization
+        graph.x[:, 2] = graph.x[:, 2] / 3.14 # phi
+        graph.x[:, 5] = graph.x[:, 5] / 10  # type
         return graph
