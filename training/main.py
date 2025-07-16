@@ -9,8 +9,8 @@ from torch_geometric.loader import DataLoader
 
 from sklearn.model_selection import train_test_split
 
-from model import DRNetwork
-from dataset import GraphDataset
+from model import DRNetwork, DRNetworkNoConv
+from dataset import Graph, GraphDataset
 from train import train_batch, validate_batch
 from loss import ContrastiveLoss
 

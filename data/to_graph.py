@@ -19,7 +19,6 @@ FEATURES = [
     'tc_isDuplicate',
     'tc_matched_simIdx',
     'tc_lsIdx',
-    'tc_t3Idx'
 ]
 
 OUTPUT_FEATURES = [
@@ -30,6 +29,22 @@ OUTPUT_FEATURES = [
     'tc_cosphi',
     'tc_type',
 ]
+
+def delta_phi(phi1, phi2):
+    dphi = phi1 - phi2
+    dphi = (dphi + np.pi) % (2 * np.pi) - np.pi
+    return dphi
+
+def delta_R(eta1, phi1, eta2, phi2):
+    deta = eta1 - eta2
+    dphi = delta_phi(phi1, phi2)
+    return np.sqrt(deta**2 + dphi**2)
+
+class Graph(Data):
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'edge_index' or key == 'pair_idxs_left' or key == 'pair_idxs_right':
+            return self.num_nodes
+        return super().__inc__(key, value, *args, **kwargs)
 
 class GraphBuilder:
     def __init__(self, input_path, output_path):
@@ -79,19 +94,12 @@ class GraphBuilder:
             pair_idxs_left = np.array(pair_idxs_left)
             pair_idxs_right = np.array(pair_idxs_right)
 
-            deltaR = np.sqrt((etas[pair_idxs_left] - etas[pair_idxs_right])**2 + 
-                             np.abs(((phis[pair_idxs_left] - phis[pair_idxs_right] + np.pi) % (2 * np.pi)) - np.pi)**2)
+            deltaR_dups = delta_R(etas[np.array(pair_idxs_left)], phis[np.array(pair_idxs_left)], etas[np.array(pair_idxs_right)], phis[np.array(pair_idxs_right)])
 
             # Remove pairs with deltaR == 0 (exact duplicates)
-            pair_idxs_left = list(pair_idxs_left[deltaR > 0])
-            pair_idxs_right = list(pair_idxs_right[deltaR > 0])
+            pair_idxs_left = list(pair_idxs_left[deltaR_dups > 0])
+            pair_idxs_right = list(pair_idxs_right[deltaR_dups > 0])
             dup_pair_labels = [1] * len(pair_idxs_left)
-
-
-            deltaR = np.sqrt((etas[pair_idxs_left] - etas[pair_idxs_right])**2 + 
-                             np.abs(((phis[pair_idxs_left] - phis[pair_idxs_right] + np.pi) % (2 * np.pi)) - np.pi)**2)
-
-            num_dups = len(pair_idxs_left)
 
             # NON-DUPLICATES
             n_particles = len(pts)
@@ -101,59 +109,29 @@ class GraphBuilder:
             both_duplicates = np.logical_and(duplicate_mask[i_indices], duplicate_mask[j_indices])
             valid_i = i_indices[~both_duplicates]
             valid_j = j_indices[~both_duplicates]
-
-            deltaR = np.sqrt((etas[valid_i] - etas[valid_j])**2 + np.abs(((phis[valid_i] - phis[valid_j] + np.pi) % (2 * np.pi)) - np.pi)**2)
             
+            deltaR_nodup = delta_R(etas[valid_i], phis[valid_i], etas[valid_j], phis[valid_j])
+
             # Add diverse negative samples instead of just close pairs
             negative_pairs_i = []
             negative_pairs_j = []
             negative_labels = []
 
-            # Identify close pairs (deltaR < 0.02)
-            close_pairs_mask = (deltaR < 0.05) & (deltaR > 0.)
+            close_pairs_mask = (deltaR_nodup > 0.) & (deltaR_nodup < 0.1)
             close_i = valid_i[close_pairs_mask]
             close_j = valid_j[close_pairs_mask]
 
             # 1. Sample some close but non-duplicate pairs (hard negatives)
             if len(close_i) > 0:
-                n_close_samples = min(int(num_dups), len(close_i))
-                if n_close_samples > 0:
-                    close_sample_indices = np.random.choice(len(close_i), size=n_close_samples, replace=False)
-                    negative_pairs_i.extend(close_i[close_sample_indices].tolist())
-                    negative_pairs_j.extend(close_j[close_sample_indices].tolist())
-                    negative_labels.extend([0] * n_close_samples)
-
-            # 2. Sample medium distance pairs (medium negatives)
-            medium_pairs_mask = (deltaR >= 0.05) & (deltaR < 0.1)
-            medium_i = valid_i[medium_pairs_mask]
-            medium_j = valid_j[medium_pairs_mask]
-            
-            if len(medium_i) > 0:
-                n_medium_samples = min(int(num_dups * 0.05), len(medium_i))
-                if n_medium_samples > 0:
-                    medium_sample_indices = np.random.choice(len(medium_i), size=n_medium_samples, replace=False)
-                    negative_pairs_i.extend(medium_i[medium_sample_indices].tolist())
-                    negative_pairs_j.extend(medium_j[medium_sample_indices].tolist())
-                    negative_labels.extend([0] * n_medium_samples)
-
-            # 3. Sample some random distant pairs (easy negatives)
-            far_pairs_mask = deltaR >= 1.0
-            far_i = valid_i[far_pairs_mask]
-            far_j = valid_j[far_pairs_mask]
-            
-            if len(far_i) > 0:
-                n_far_samples = min(int(num_dups * 0.05), len(far_i))
-                if n_far_samples > 0:
-                    far_sample_indices = np.random.choice(len(far_i), size=n_far_samples, replace=False)
-                    negative_pairs_i.extend(far_i[far_sample_indices].tolist())
-                    negative_pairs_j.extend(far_j[far_sample_indices].tolist())
-                    negative_labels.extend([0] * n_far_samples)
+                negative_pairs_i.extend(close_i)
+                negative_pairs_j.extend(close_j)
+                negative_labels.extend([0] * len(close_i))
 
             # Combine all pairs
             pair_idxs_left.extend(negative_pairs_i)
             pair_idxs_right.extend(negative_pairs_j)
             dup_pair_labels.extend(negative_labels)
-            
+
             # Ensure we have some examples (skip if no valid pairs)
             if len(pair_idxs_left) == 0:
                 print(f"No valid pairs found for event {idx}, skipping...")
@@ -165,7 +143,7 @@ class GraphBuilder:
 
             edge_index, edge_attr = self._build_edges(arr, dup_features)
 
-            graph = Data(
+            graph = Graph(
                 x=torch.tensor(dup_features.values, dtype=torch.float),
                 y=torch.tensor(dup_pair_labels, dtype=torch.float),
                 edge_index=edge_index,
@@ -173,7 +151,6 @@ class GraphBuilder:
                 pair_idxs_left=torch.tensor(pair_idxs_left, dtype=torch.long),
                 pair_idxs_right=torch.tensor(pair_idxs_right, dtype=torch.long),
             )
-
             torch.save(graph, output_file)
             print(f"Processed graph {idx}")
 
@@ -216,10 +193,8 @@ class GraphBuilder:
                     node_i, node_j = nodes[i], nodes[j]
                     
                     # Calculate dR² between the two nodes
-                    delta_eta = etas[node_i] - etas[node_j]
-                    delta_phi = np.abs(((phis[node_i] - phis[node_j] + np.pi) % (2 * np.pi)) - np.pi)
-                    deltaR = np.sqrt(delta_eta**2 + delta_phi**2)
-                    
+                    deltaR = delta_R(etas[node_i], phis[node_i], etas[node_j], phis[node_j])
+
                     # Add edge in both directions (for undirected graph representation)
                     edge_src.extend([node_i, node_j])
                     edge_dst.extend([node_j, node_i])
@@ -242,7 +217,6 @@ class GraphBuilder:
                     self.input_tree.arrays(FEATURES, entry_start=idx, entry_stop=idx + 1),
                     idx, debug, overwrite
                 )
-
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
